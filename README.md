@@ -90,7 +90,85 @@ This document describes how **App A (Pega)** and **App B (BDRP)** securely excha
 
 - **Encrypting Payload**  
   - Encrypt sensitive fields with RSA public key.  
-  - Produce Base64 blob.  
+  - Produce Base64 blob.
+
+
+## Chapter 5 – App A (Pega) Consumes & Decrypts Kafka Messages
+
+- **Kafka Consumption**  
+  - App A (Pega) subscribes to the Kafka topic and receives the encrypted message.  
+
+- **Extract & Prepare Ciphertext**  
+  - Extract the encrypted payload (`payload` field) from the Kafka message.  
+  - Decode the Base64 string into a byte array for decryption.  
+
+- **Decrypt via Key Vault**  
+  - App A (Pega) calls the **Azure Key Vault Cryptography API** with:  
+    - Key URI (e.g., `https://kv-rsa-msg-prod.vault.azure.net/keys/myRSAKey/<version>`)  
+    - Algorithm (`RSA-OAEP`)  
+    - Ciphertext byte array  
+  - Azure Key Vault uses the **private key internally** within its HSM and returns the decrypted plaintext.  
+
+- **Business Processing**  
+  - Convert the plaintext bytes into a string/JSON.  
+  - Pass the decrypted data back into the Pega workflow for business logic.  
+  - Implement error handling for:  
+    - Key version mismatch  
+    - Corrupted ciphertext  
+    - Unauthorized access errors  
+
+---
+
+## Chapter 6 – Runtime Security & Governance
+
+- **Identity Governance**  
+  - App A (Pega): `decrypt` only.  
+  - App B (BDRP): `get` only.  
+
+- **Network Governance**  
+  - App A (Pega): access Key Vault via **Private Endpoint**.  
+  - App B (BDRP): access Key Vault via **Public Endpoint + IP whitelist**.  
+
+- **Key Governance**  
+  - Define a regular key rotation schedule (e.g., 12 months).  
+  - Allow temporary overlap between old and new keys to prevent downtime.  
+  - Notify App B (BDRP) when a new public key is published.  
+
+- **Audit & Monitoring**  
+  - Enable Key Vault diagnostic logs.  
+  - Monitor who accessed `decrypt` and `get` operations.  
+  - Create alerts for unauthorized or failed access attempts.  
+
+---
+
+## Sequence Diagram
+
+```plantuml
+@startuml
+title RSA + Azure Key Vault + Kafka Messaging Flow
+
+actor "App B (BDRP)" as B
+participant "Kafka Topic" as K
+actor "App A (Pega)" as A
+participant "Azure Key Vault" as KV
+
+B -> KV: (Optional) Fetch Public Key (GET /keys/myRSA)
+KV --> B: Public Key (RSA)
+
+B -> B: Encrypt payload with Public Key
+B -> K: Publish Kafka Message {"payload":"ENCRYPTED_BLOB"}
+
+A -> K: Subscribe & Read Message
+K --> A: Kafka Message with Encrypted Payload
+
+A -> A: Extract & Base64-decode Encrypted Blob
+A -> KV: Decrypt(ciphertext, key=myRSA)
+KV --> A: Plaintext Payload
+
+A -> A: Process decrypted data in Pega workflow
+
+@e
+    
 
 - **Publishing Kafka Message**  
   ```json
